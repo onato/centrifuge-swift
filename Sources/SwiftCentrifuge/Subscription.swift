@@ -54,17 +54,17 @@ public class CentrifugeSubscription {
         }
     }
     
-    public func publish(data: Data, completion: @escaping (Error?) -> ()) {
+    public func publish(data: Data, completion: @escaping (CentrifugePublishResult?, Error?) -> ()) {
         self.waitForSubscribe(completion: { [weak self, channel = self.channel] error in
             if let err = error {
-                completion(err)
+                completion(nil, err)
             } else {
                 self?.centrifuge?.publish(channel: channel, data: data, completion: completion)
             }
         })
     }
     
-    public func presence(completion: @escaping ([String: CentrifugeClientInfo]?, Error?) -> ()) {
+    public func presence(completion: @escaping (CentrifugePresenceResult?, Error?) -> ()) {
         self.waitForSubscribe(completion: { [weak self, channel = self.channel] error in
             if let err = error {
                 completion(nil, err)
@@ -74,7 +74,7 @@ public class CentrifugeSubscription {
         })
     }
     
-    public func presenceStats(completion: @escaping (CentrifugePresenceStats?, Error?) -> ()) {
+    public func presenceStats(completion: @escaping (CentrifugePresenceStatsResult?, Error?) -> ()) {
         self.waitForSubscribe(completion: { [weak self, channel = self.channel] error in
             if let err = error {
                 completion(nil, err)
@@ -84,12 +84,12 @@ public class CentrifugeSubscription {
         })
     }
     
-    public func history(completion: @escaping ([CentrifugePublication]?, Error?) -> ()) {
+    public func history(limit: Int32 = 0, since: CentrifugeStreamPosition? = nil, reverse: Bool = false, completion: @escaping (CentrifugeHistoryResult?, Error?) -> ()) {
         self.waitForSubscribe(completion: { [weak self, channel = self.channel] error in
             if let err = error {
                 completion(nil, err)
             } else {
-                self?.centrifuge?.history(channel: channel, completion: completion)
+                self?.centrifuge?.history(channel: channel, limit: limit, since: since, reverse: reverse, completion: completion)
             }
         })
     }
@@ -244,15 +244,16 @@ public class CentrifugeSubscription {
         }
         let previousStatus = self.status
         self.status = .unsubscribed
-        if previousStatus == .subscribeSuccess {
-            // Only call unsubscribe event if Subscription was successfully subscribed.
-            self.centrifuge?.delegateQueue.addOperation { [weak self] in
-                guard let strongSelf = self else { return }
-                strongSelf.delegate?.onUnsubscribe(
-                    strongSelf,
-                    CentrifugeUnsubscribeEvent()
-                )
-            }
+        if previousStatus != .subscribeSuccess {
+            return
+        }
+        // Only call unsubscribe event if Subscription was successfully subscribed.
+        self.centrifuge?.delegateQueue.addOperation { [weak self] in
+            guard let strongSelf = self else { return }
+            strongSelf.delegate?.onUnsubscribe(
+                strongSelf,
+                CentrifugeUnsubscribeEvent()
+            )
         }
     }
     
@@ -277,6 +278,27 @@ public class CentrifugeSubscription {
             strongSelf.needRecover = false
             strongSelf.moveToUnsubscribed()
             strongSelf.centrifuge?.unsubscribe(sub: strongSelf)
+        }
+    }
+
+    // onRemove should only be called from Client.removeSubscription.
+    func onRemove() {
+        self.centrifuge?.syncQueue.async {
+            if self.status != .subscribeSuccess && self.status != .subscribeError {
+                return
+            }
+            let previousStatus = self.status
+            self.status = .unsubscribed
+            if previousStatus != .subscribeSuccess {
+                return
+            }
+            // Only call unsubscribe event if Subscription was successfully subscribed.
+            self.centrifuge?.delegateQueue.addOperation {
+                self.delegate?.onUnsubscribe(
+                    self,
+                    CentrifugeUnsubscribeEvent()
+                )
+            }
         }
     }
 }
